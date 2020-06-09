@@ -5,16 +5,22 @@ A matplotlib backend for displaying figures via sixel terminal graphics
 
 Based on the ipykernel source  code "backend_inline.py"
 
+Based on python example from libsixel "converter.py"
+
 # Copyright (c) IPython Development Team.
+# Copyright (c) Hayaki Saito.
 # Distributed under the terms of the Modified BSD License.
 
 """
 
 
+import io
+import sys
 import matplotlib
 
 from matplotlib._pylab_helpers import Gcf
-from subprocess import Popen, PIPE
+from libsixel import *
+from PIL import Image
 
 from .xterm import xterm_pixels
 
@@ -40,7 +46,40 @@ def resize_fig(figure):
     size /= factor
 
     figure.set_size_inches(size)
-    print(size)
+
+
+def write_sixel(image, outfile):
+    data = image.tobytes()
+    width, height = image.size
+
+    output = sixel_output_new(lambda data, s: s.write(data), outfile)
+
+    try:
+        if image.mode == 'RGBA':
+            dither = sixel_dither_new(256)
+            sixel_dither_initialize(dither, data, width, height, SIXEL_PIXELFORMAT_RGBA8888)
+        elif image.mode == 'RGB':
+            dither = sixel_dither_new(256)
+            sixel_dither_initialize(dither, data, width, height, SIXEL_PIXELFORMAT_RGB888)
+        elif image.mode == 'P':
+            palette = image.getpalette()
+            dither = sixel_dither_new(256)
+            sixel_dither_set_palette(dither, palette)
+            sixel_dither_set_pixelformat(dither, SIXEL_PIXELFORMAT_PAL8)
+        elif image.mode == 'L':
+            dither = sixel_dither_get(SIXEL_BUILTIN_G8)
+            sixel_dither_set_pixelformat(dither, SIXEL_PIXELFORMAT_G8)
+        elif image.mode == '1':
+            dither = sixel_dither_get(SIXEL_BUILTIN_G1)
+            sixel_dither_set_pixelformat(dither, SIXEL_PIXELFORMAT_G1)
+        else:
+            raise RuntimeError('unexpected image mode')
+        try:
+            sixel_encode(data, width, height, 1, dither, output)
+        finally:
+            sixel_dither_unref(dither)
+    finally:
+        sixel_output_unref(output)
 
 
 def display(figure):
@@ -48,10 +87,13 @@ def display(figure):
 
     resize_fig(figure)
 
-    p = Popen(["convert", "-colors", '16', 'png:-', 'sixel:-'], stdin=PIPE)
-    figure.savefig(p.stdin, format='png')
-    p.stdin.close()
-    p.wait()
+    buf = io.BytesIO()
+    figure.savefig(buf, format="png")
+    buf.seek(0)
+    image = Image.open(buf)
+
+    write_sixel(image, sys.stdout.buffer)
+    sys.stdout.write("\n")
 
 
 def show(close=False, block=None):
